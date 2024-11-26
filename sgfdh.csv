@@ -1,4 +1,4 @@
-booking_id,1ths_as_member,weight,days_before,day_of_week,time,category,attended
+booking_id,months_as_member,weight,days_before,day_of_week,time,category,attended
 0739,52,58.24,4,2,1,3,1
 0076,20,60.1,2,1,1,3,0
 0486,66,61.01,5,2,1,3,1
