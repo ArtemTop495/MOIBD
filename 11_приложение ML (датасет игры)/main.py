@@ -138,3 +138,6 @@ class Item(BaseModel):
 @app.post("/predict")
 def post_pred_text(item: Item):
     return {'cluster': predict_cluster(item.text)}
+
+# uvicorn api:app --reload
+# streamlit run app.py

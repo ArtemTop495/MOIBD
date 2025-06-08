@@ -102,7 +102,7 @@ def predict_cluster(text, threshold=0.1):
     prediction = model.predict(text_vectorized)[0]
     max_prob = max(probabilities)
     selected_clusters = [
-        i for i, prob in enumerate(probabilities)
+        f'{i}' for i, prob in enumerate(probabilities)
         if max_prob - prob <= 0
     ]
     rez1 = f"{' или '.join(selected_clusters)}"
@@ -117,3 +117,6 @@ class Item(BaseModel):
 @app.post("/predict")
 def post_pred_text(item: Item):
     return {'cluster': predict_cluster(item.text)}
+
+# uvicorn api:app --reload
+# streamlit run app.py

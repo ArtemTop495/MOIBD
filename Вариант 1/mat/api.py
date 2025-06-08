@@ -7,10 +7,10 @@ import numpy as np
 app = FastAPI()
 
 # Загрузка модели и векторизатора
-with open('model_rf.pkl', 'rb') as f:
+with open('model_lr.pkl', 'rb') as f:
     model = pickle.load(f)
 
-with open('vectorizer.pkl', 'rb') as f:
+with open('vectorizer_updated.pkl', 'rb') as f:
     tfidf = pickle.load(f)
 
 
@@ -51,5 +51,5 @@ if __name__ == "__main__":
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
-# uvicorn ap1: app-reload
+# uvicorn api:app --reload
 # streamlit run app.py
