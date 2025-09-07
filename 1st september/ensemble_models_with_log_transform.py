@@ -11,6 +11,7 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import mean_squared_error, r2_score
 from xgboost import XGBRegressor
 import warnings
+
 warnings.filterwarnings('ignore')
 
 # Load the dataset
@@ -23,6 +24,7 @@ print("Unique price_currency values:", data['price_currency'].unique())
 
 # Convert price to numeric, handle invalid values
 data['price'] = pd.to_numeric(data['price'], errors='coerce')
+
 
 # Currency conversion to TRY (rates as of September 1, 2025)
 def convert_to_try(row):
@@ -44,6 +46,7 @@ def convert_to_try(row):
     except:
         return np.nan
 
+
 data['price_try'] = data.apply(convert_to_try, axis=1)
 
 # Drop rows with NaN or non-positive prices
@@ -57,6 +60,7 @@ print("Rows with price_try <= 0 after drop:", (data['price_try'] <= 0).sum())
 sale_data = data[data['listing_type'] == 1].copy()
 rent_data = data[data['listing_type'] == 2].copy()
 print(f"Sale data rows: {len(sale_data)}, Rent data rows: {len(rent_data)}")
+
 
 # Function to preprocess data
 def preprocess_data(df):
@@ -112,6 +116,7 @@ def preprocess_data(df):
 
     return df
 
+
 # Preprocess sale and rent data
 sale_data = preprocess_data(sale_data)
 rent_data = preprocess_data(rent_data)
@@ -132,8 +137,11 @@ print("Rent data - NaN in X:\n", rent_X.isnull().sum())
 print("Rent data - NaN in y_log:", rent_y_log.isnull().sum())
 
 # Split data
-sale_X_train, sale_X_test, sale_y_train, sale_y_test = train_test_split(sale_X, sale_y_log, test_size=0.2, random_state=42)
-rent_X_train, rent_X_test, rent_y_train, rent_y_test = train_test_split(rent_X, rent_y_log, test_size=0.2, random_state=42)
+sale_X_train, sale_X_test, sale_y_train, sale_y_test = train_test_split(sale_X, sale_y_log, test_size=0.2,
+                                                                        random_state=42)
+rent_X_train, rent_X_test, rent_y_train, rent_y_test = train_test_split(rent_X, rent_y_log, test_size=0.2,
+                                                                        random_state=42)
+
 
 # Initialize models
 def initialize_models():
@@ -148,6 +156,7 @@ def initialize_models():
             final_estimator=LinearRegression()
         )
     }
+
 
 # Train and evaluate models for sale and rent
 def train_evaluate_models(X_train, X_test, y_train, y_test, dataset_name):
@@ -166,6 +175,7 @@ def train_evaluate_models(X_train, X_test, y_train, y_test, dataset_name):
         print(f"{dataset_name} - {name} - MSE: {mse:.2f}, R2: {r2:.2f}")
     return results, predictions
 
+
 # Train and evaluate for sale and rent
 sale_results, sale_predictions = train_evaluate_models(sale_X_train, sale_X_test, sale_y_train, sale_y_test, "Sale")
 rent_results, rent_predictions = train_evaluate_models(rent_X_train, rent_X_test, rent_y_train, rent_y_test, "Rent")
@@ -173,8 +183,10 @@ rent_results, rent_predictions = train_evaluate_models(rent_X_train, rent_X_test
 # Find best models
 sale_best_model = min(sale_results.items(), key=lambda x: x[1]['MSE'])
 rent_best_model = min(rent_results.items(), key=lambda x: x[1]['MSE'])
-print(f"\nSale Best Model: {sale_best_model[0]} with MSE: {sale_best_model[1]['MSE']:.2f} and R2: {sale_best_model[1]['R2']:.2f}")
-print(f"Rent Best Model: {rent_best_model[0]} with MSE: {rent_best_model[1]['MSE']:.2f} and R2: {rent_best_model[1]['R2']:.2f}")
+print(
+    f"\nSale Best Model: {sale_best_model[0]} with MSE: {sale_best_model[1]['MSE']:.2f} and R2: {sale_best_model[1]['R2']:.2f}")
+print(
+    f"Rent Best Model: {rent_best_model[0]} with MSE: {rent_best_model[1]['MSE']:.2f} and R2: {rent_best_model[1]['R2']:.2f}")
 
 # Visualization: Bar Plots for MSE and R2
 fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
