@@ -1,343 +1,194 @@
+# recommender_api.py
+
+from fastapi import FastAPI, HTTPException
 import pandas as pd
-import pickle
-from fastapi import FastAPI, HTTPException, Body
-from pydantic import BaseModel
-from scipy.sparse import csr_matrix, vstack
-from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-import ast
-import time
+import pickle
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.neighbors import NearestNeighbors
+from sklearn.feature_extraction.text import TfidfVectorizer
+from ast import literal_eval
+import json
 import os
 
-app = FastAPI(title="Movie Recommender API")
+app = FastAPI()
 
-# Load data
-with open('tfidf_vectorizer.pkl', 'rb') as f:
-    tfidf = pickle.load(f)
-with open('nn_model.pkl', 'rb') as f:
-    nn_content = pickle.load(f)
-movies = pd.read_csv('movies_metadata.csv', low_memory=False)
-ratings = pd.read_csv('ratings.csv', low_memory=False)
-links = pd.read_csv('links.csv', low_memory=False)
+# Пути к файлам
+MOVIES_FILE = 'movies_metadata.csv'
+RATINGS_FILE = 'ratings_small.csv'
+KEYWORDS_FILE = 'keywords.csv'
+LINKS_FILE = 'links_small.csv'
+USER_RATINGS_FILE = 'user_ratings.json'
+TFIDF_MODEL_FILE = 'tfidf_vectorizer.pkl'
+NN_MODEL_FILE = 'nn_model.pkl'
 
-# Clean and align IDs
-movies['id'] = pd.to_numeric(movies['id'], errors='coerce').astype('Int64').astype(str)
-links['tmdbId'] = pd.to_numeric(links['tmdbId'], errors='coerce').astype('Int64').astype(str)
-links = links.dropna(subset=['tmdbId'])
-movies = movies.dropna(subset=['id'])
-movies = movies.merge(links[['movieId', 'tmdbId']], left_on='id', right_on='tmdbId', how='inner')
-movies['movieId'] = movies['movieId'].astype(str)
-ratings['movieId'] = ratings['movieId'].astype(str)
+# Глобальные переменные
+movies = None
+tfidf = None
+tfidf_matrix = None
+nn_model = None
+item_sim_df = None
+title_to_index = None
+user_ratings = {}
+user_item_matrix = None
 
-# Filter movies to those in ratings
-movies = movies[movies['movieId'].isin(ratings['movieId'].unique())]
-title_to_index = pd.Series(movies.index, index=movies['original_title'])
+def load_user_ratings():
+    global user_ratings
+    if os.path.exists(USER_RATINGS_FILE):
+        with open(USER_RATINGS_FILE, 'r') as f:
+            user_ratings = json.load(f)
+    else:
+        user_ratings = {}
 
-# Calculate weighted rating
-def calculate_weighted_rating(df, m=None, C=None):
-    if m is None:
-        m = df['vote_count'].quantile(0.80)
-    if C is None:
-        C = df['vote_average'].mean()
-    v = df['vote_count']
-    R = df['vote_average']
-    return (v / (v + m) * R) + (m / (v + m) * C)
+def save_user_ratings():
+    with open(USER_RATINGS_FILE, 'w') as f:
+        json.dump(user_ratings, f)
 
-# Clean and compute weighted rating
-movies = movies[movies['vote_count'].notna() & movies['vote_average'].notna()]
-movies['weighted_rating'] = calculate_weighted_rating(movies)
+def load_data():
+    global movies, tfidf, tfidf_matrix, nn_model, item_sim_df, title_to_index, user_item_matrix
 
-# Parse genres
-def parse_genres(genres):
-    try:
-        genres_list = ast.literal_eval(genres) if pd.notna(genres) else []
-        return ' '.join([g['name'] for g in genres_list if isinstance(g, dict) and 'name' in g])
-    except (ValueError, SyntaxError):
-        return ''
+    movies = pd.read_csv(MOVIES_FILE, low_memory=False)
+    ratings = pd.read_csv(RATINGS_FILE, low_memory=False)
+    keywords = pd.read_csv(KEYWORDS_FILE, low_memory=False)
+    links = pd.read_csv(LINKS_FILE, low_memory=False)
 
-movies['genres_str'] = movies['genres'].apply(parse_genres)
+    movies['id'] = pd.to_numeric(movies['id'], errors='coerce')
+    movies = movies.dropna(subset=['id'])
+    movies['id'] = movies['id'].astype('int')
 
-# Create soup
-def create_soup(row):
-    genres = row['genres_str'] if pd.notna(row['genres_str']) else ''
-    overview = row['overview'] if pd.notna(row['overview']) else ''
-    return f"{genres} {overview}".strip() or "unknown"
+    ratings = ratings.merge(links[['movieId', 'tmdbId']], left_on='movieId', right_on='movieId', how='inner')
+    ratings['movieId'] = pd.to_numeric(ratings['tmdbId'], errors='coerce')
+    ratings = ratings.merge(movies[['id', 'original_title', 'genres', 'overview', 'vote_average', 'vote_count', 'release_date']], left_on='movieId', right_on='id', how='inner')
 
-movies['soup'] = movies.apply(create_soup, axis=1)
-print("Missing soup values:", movies['soup'].isna().sum())
-print("Empty soup values:", (movies['soup'] == '').sum())
+    def get_genres(x):
+        try:
+            return ' '.join([d['name'] for d in literal_eval(x)]) if pd.notnull(x) else ''
+        except:
+            return ''
 
-# Create sparse matrix
-def create_sparse_matrix(ratings):
-    from scipy.sparse import csr_matrix
-    # Convert both user_ids and movie_ids to categorical
-    user_ids = ratings['userId'].astype('category')
-    movie_ids = ratings['movieId'].astype('category')
-    # Create the sparse matrix
-    sparse_matrix = csr_matrix(
-        (ratings['rating'], (user_ids.cat.codes, movie_ids.cat.codes)),
-        shape=(len(user_ids.cat.categories), len(movie_ids.cat.categories))
-    )
-    return sparse_matrix, user_ids.cat.categories, movie_ids.cat.categories
+    movies['genres_str'] = movies['genres'].apply(get_genres)
 
-# Subsample ratings
-top_users = ratings['userId'].value_counts().head(500).index
-top_movies = ratings['movieId'].value_counts().head(2000).index
-ratings = ratings[ratings['userId'].isin(top_users) & ratings['movieId'].isin(top_movies)]
-user_ratings, user_index, movie_index = create_sparse_matrix(ratings)
+    def get_keywords(x):
+        try:
+            return ' '.join([d['name'] for d in literal_eval(x)]) if pd.notnull(x) else ''
+        except:
+            return ''
 
-# Compute similarity matrix
-sim_matrix = cosine_similarity(user_ratings.T)
+    keywords['keywords_str'] = keywords['keywords'].apply(get_keywords)
+    movies = movies.merge(keywords[['id', 'keywords_str']], on='id', how='left')
 
-# New user ID
-new_user_id = ratings['userId'].max() + 1 if not ratings.empty else 1
+    movies['soup'] = movies['overview'].fillna('') + ' ' + movies['genres_str'] + ' ' + movies['keywords_str'].fillna('')
 
-# Load user ratings if exists and add to matrix
-if os.path.exists('user_ratings.csv'):
-    ur = pd.read_csv('user_ratings.csv')
-    if not ur.empty:
-        ur['movieId'] = ur['movieId'].astype(str)
-        # Add new user to index and matrix
-        user_index = user_index.append(pd.Index([new_user_id]))
-        empty_row = csr_matrix((1, user_ratings.shape[1]))
-        user_ratings = vstack([user_ratings, empty_row])
-        # Set user ratings
-        user_row_idx = user_ratings.shape[0] - 1
-        for _, row in ur.iterrows():
-            m_id = row['movieId']
-            if m_id in movie_index:
-                col = movie_index.get_loc(m_id)
-                user_ratings[user_row_idx, col] = row['rating']
-        # Recompute sim_matrix
-        sim_matrix = cosine_similarity(user_ratings.T)
+    tfidf = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = tfidf.fit_transform(movies['soup'])
 
-# Recommend by genre
-def recommend_by_genre(genre: str, n: int = 10):
+    nn_model = NearestNeighbors(n_neighbors=11, metric='cosine', algorithm='brute')
+    nn_model.fit(tfidf_matrix)
+
+    def weighted_rating(x, m=movies['vote_count'].quantile(0.8), C=movies['vote_average'].mean()):
+        v = x['vote_count']
+        R = x['vote_average']
+        return (v / (v + m) * R) + (m / (m + v) * C)
+
+    movies['weighted_rating'] = movies.apply(weighted_rating, axis=1)
+
+    title_to_index = pd.Series(movies.index, index=movies['id'])
+
+    user_item_matrix = ratings.pivot_table(index='userId', columns='movieId', values='rating').fillna(0)
+    item_sim = cosine_similarity(user_item_matrix.T)
+    item_sim_df = pd.DataFrame(item_sim, index=user_item_matrix.columns, columns=user_item_matrix.columns)
+
+    with open(TFIDF_MODEL_FILE, 'wb') as f:
+        pickle.dump(tfidf, f)
+    with open(NN_MODEL_FILE, 'wb') as f:
+        pickle.dump(nn_model, f)
+
+# Загрузка данных при старте
+load_user_ratings()
+load_data()
+
+@app.get("/top10_popular")
+def api_get_top10_popular():
+    top10 = movies.sort_values('weighted_rating', ascending=False)['original_title'].head(10).tolist()
+    return {"recommendations": top10}
+
+@app.get("/recommend_by_genre")
+def api_recommend_by_genre(genre: str, n: int = 10):
     genre_movies = movies[movies['genres_str'].str.contains(genre, case=False, na=False)]
     genre_movies = genre_movies.sort_values('weighted_rating', ascending=False)
-    return genre_movies['original_title'].head(n).tolist()
+    recs = genre_movies['original_title'].head(n).tolist()
+    return {"recommendations": recs}
 
-# Recommend by content (title)
-def recommend_by_title(title: str, release_date: str = None, tmdb_id: str = None, n: int = 10):
-    print(f"Checking title: {title}, release_date: {release_date}, tmdb_id: {tmdb_id}")
-    if title not in title_to_index:
-        print(f"Title {title} not in title_to_index")
-        return []
-    indices = title_to_index[title]
-    if isinstance(indices, pd.Series):
-        indices = indices.values
-    else:
-        indices = [indices]
-    # Filter by release_date or tmdb_id if provided
-    if release_date or tmdb_id:
-        filtered_indices = []
-        for idx in indices:
-            movie = movies.loc[idx]
-            if (release_date and movie['release_date'] == release_date) or (tmdb_id and movie['id'] == tmdb_id):
-                filtered_indices.append(idx)
-        indices = filtered_indices
-        if not indices:
-            print(f"No movie found for {title} with release_date {release_date} or tmdb_id {tmdb_id}")
-            return []
+@app.get("/search_movies")
+def api_search_movies(query: str):
+    matches = movies[movies['original_title'].str.lower() == query.lower()]
+    return {"movies": matches[['id', 'original_title', 'release_date']].replace(np.nan, None).to_dict('records')}
+
+@app.get("/recommend_by_title")
+def api_recommend_by_title(movie_id: int, n: int = 10):
+    if movie_id not in movies['id'].values:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    idx = movies[movies['id'] == movie_id].index[0]
+    movie_vector = tfidf_matrix[idx]
+    distances, indices = nn_model.kneighbors(movie_vector, n_neighbors=n+1)
+    movie_indices = indices[0][1:]
+    recs = movies['original_title'].iloc[movie_indices].tolist()
+    return {"recommendations": recs}
+
+@app.get("/recommend_collaborative")
+def api_recommend_collaborative(movie_id: int, n: int = 10):
+    if movie_id not in movies['id'].values:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    if movie_id not in item_sim_df.columns:
+        raise HTTPException(status_code=404, detail="No recommendations available")
+    similar_movies = item_sim_df.loc[movie_id].sort_values(ascending=False).iloc[1:n+1].index
+    recs = movies[movies['id'].isin(similar_movies)]['original_title'].head(n).tolist()
+    return {"recommendations": recs}
+
+@app.get("/list_all_movies")
+def api_list_all_movies():
+    movie_list = movies[['original_title', 'release_date']].replace(np.nan, None).to_dict('records')
+    return {"movies": movie_list}
+
+@app.post("/set_rating")
+def api_set_rating(user_id: str, movie_id: int, rating: float):
+    if movie_id not in movies['id'].values:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    if user_id not in user_ratings:
+        user_ratings[user_id] = {}
+    user_ratings[user_id][movie_id] = rating
+    save_user_ratings()
+    return {"status": "success"}
+
+@app.get("/recommend_for_user")
+def api_recommend_for_user(user_id: str, n: int = 10):
+    if user_id not in user_ratings or not user_ratings[user_id]:
+        raise HTTPException(status_code=404, detail="No ratings for user")
+    temp_matrix = user_item_matrix.copy()
+    if user_id not in temp_matrix.index:
+        temp_matrix.loc[user_id] = 0
+    for movie_id, rating in user_ratings.get(user_id, {}).items():
+        if movie_id in temp_matrix.columns:
+            temp_matrix.loc[user_id, movie_id] = rating
+    user_sim = cosine_similarity(temp_matrix)
+    user_sim_df = pd.DataFrame(user_sim, index=temp_matrix.index, columns=temp_matrix.index)
+    similar_users = user_sim_df.loc[user_id].sort_values(ascending=False).iloc[1:11].index
+    user_rated = set(user_ratings[user_id].keys())
     recommendations = {}
-    for idx in indices:
-        movie_data = movies.loc[idx, ['original_title', 'release_date', 'id', 'movieId']].to_dict()
-        movie_key = f"{movie_data['original_title']} ({movie_data['release_date']}) [ID: {movie_data['id']}]"
-        movie_soup = movies.loc[idx, 'soup']
-        movie_vector = tfidf.transform([movie_soup])
-        distances, nn_indices = nn_content.kneighbors(movie_vector, n_neighbors=n + 1)
-        movie_indices = nn_indices[0][1:]  # Exclude the movie itself
-        rec_titles = movies['original_title'].iloc[movie_indices].tolist()
-        recommendations[movie_key] = rec_titles
-        print(f"Recommendations for {movie_key}: {rec_titles}")
+    for sim_user in similar_users:
+        sim_user_ratings = temp_matrix.loc[sim_user]
+        for movie_id, rating in sim_user_ratings[sim_user_ratings > 0].items():
+            if movie_id not in user_rated:
+                if movie_id not in recommendations:
+                    recommendations[movie_id] = 0
+                recommendations[movie_id] += rating * user_sim_df.loc[user_id, sim_user]
     if not recommendations:
-        print(f"No recommendations generated for {title}")
-    return recommendations
+        raise HTTPException(status_code=404, detail="No recommendations")
+    sorted_recs = sorted(recommendations.items(), key=lambda x: x[1], reverse=True)[:n]
+    rec_movie_ids = [m[0] for m in sorted_recs]
+    recs = movies[movies['id'].isin(rec_movie_ids)]['original_title'].tolist()
+    return {"recommendations": recs}
 
-# Recommend by collaborative filtering
-def recommend_collaborative(title: str, release_date: str = None, tmdb_id: str = None, n: int = 10):
-    print(f"Checking title: {title}, release_date: {release_date}, tmdb_id: {tmdb_id}")
-    if title not in title_to_index:
-        print(f"Title {title} not in title_to_index")
-        return []
-    indices = title_to_index[title]
-    if isinstance(indices, pd.Series):
-        indices = indices.values
-    else:
-        indices = [indices]
-    # Filter by release_date or tmdb_id if provided
-    if release_date or tmdb_id:
-        filtered_indices = []
-        for idx in indices:
-            movie = movies.loc[idx]
-            if (release_date and movie['release_date'] == release_date) or (tmdb_id and movie['id'] == tmdb_id):
-                filtered_indices.append(idx)
-        indices = filtered_indices
-        if not indices:
-            print(f"No movie found for {title} with release_date {release_date} or tmdb_id {tmdb_id}")
-            return []
-    recommendations = {}
-    for idx in indices:
-        movie_data = movies.loc[idx, ['original_title', 'release_date', 'id', 'movieId']].to_dict()
-        movie_key = f"{movie_data['original_title']} ({movie_data['release_date']}) [ID: {movie_data['id']}]"
-        movie_id = movie_data['movieId']
-        if movie_id not in movie_index:
-            print(f"No movie_idx found for movieId {movie_id}")
-            recommendations[movie_key] = []
-            continue
-        movie_idx = movie_index.get_loc(movie_id)
-        print(f"Movie index: {movie_idx}")
-        movie_vector = user_ratings[:, movie_idx]
-        similarities = cosine_similarity(movie_vector.T, user_ratings.T)[0]
-        similar_indices = similarities.argsort()[-n - 1:-1][::-1]
-        similar_movie_ids = movie_index[similar_indices]
-        similar_titles = movies[movies['movieId'].isin(similar_movie_ids)]['original_title'].head(n).tolist()
-        recommendations[movie_key] = similar_titles
-        print(f"Recommendations for {movie_key}: {similar_titles}")
-    return recommendations
-
-# Pydantic models
-class TitleRequest(BaseModel):
-    title: str
-    release_date: str | None = None
-    tmdb_id: str | None = None
-
-class GenreRequest(BaseModel):
-    genre: str
-
-# API Endpoints
-@app.get("/top10")
-async def get_top10():
-    try:
-        return movies.sort_values('weighted_rating', ascending=False)['original_title'].head(10).tolist()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/recommend/genre")
-async def get_by_genre(genre: str = "Comedy"):
-    try:
-        recommendations = recommend_by_genre(genre)
-        if not recommendations:
-            raise HTTPException(status_code=404, detail=f"No movies found for genre: {genre}")
-        return recommendations
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/recommend/title")
-async def get_by_title(title: str = "Toy Story", release_date: str | None = None, tmdb_id: str | None = None):
-    try:
-        recommendations = recommend_by_title(title, release_date, tmdb_id)
-        if not recommendations:
-            matching_movies = movies[movies['original_title'].str.contains(title, case=False, na=False)][
-                ['original_title', 'release_date', 'id']].to_dict('records')
-            error_detail = f"No recommendations found for title: {title}"
-            if matching_movies:
-                error_detail += f". Multiple movies found. Please specify release_date or tmdb_id. Matching movies: {matching_movies[:5]}"
-            raise HTTPException(status_code=404, detail=error_detail)
-        return recommendations
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@app.get("/recommend/collaborative")
-async def get_collaborative(title: str = "Toy Story", release_date: str | None = None, tmdb_id: str | None = None):
-    try:
-        recommendations = recommend_collaborative(title, release_date, tmdb_id)
-        if not recommendations:
-            matching_movies = movies[movies['original_title'].str.contains(title, case=False, na=False)][
-                ['original_title', 'release_date', 'id']].to_dict('records')
-            error_detail = f"No collaborative recommendations found for title: {title}"
-            if matching_movies:
-                error_detail += f". Multiple movies found. Please specify release_date or tmdb_id. Matching movies: {matching_movies[:5]}"
-            raise HTTPException(status_code=404, detail=error_detail)
-        return recommendations
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@app.get("/movies")
-async def get_movies():
-    try:
-        return movies[['original_title', 'release_date', 'id']].sort_values('original_title').to_dict('records')
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/rate")
-async def rate_movie(request: TitleRequest, rating: float = Body(...)):
-    global user_ratings, user_index, sim_matrix
-    title = request.title
-    release_date = request.release_date
-    tmdb_id = request.tmdb_id
-    if title not in title_to_index:
-        raise HTTPException(status_code=404, detail=f"Movie not found: {title}")
-    indices = title_to_index[title]
-    if not isinstance(indices, np.ndarray):
-        indices = [indices]
-    filtered_indices = []
-    for idx in indices:
-        movie = movies.loc[idx]
-        if (release_date and movie['release_date'] == release_date) or (tmdb_id and str(movie['id']) == str(tmdb_id)):
-            filtered_indices.append(idx)
-    if not filtered_indices:
-        if len(indices) > 1:
-            raise HTTPException(status_code=404, detail="Multiple movies found, please specify release_date or tmdb_id")
-        filtered_indices = indices
-    if len(filtered_indices) > 1:
-        raise HTTPException(status_code=404, detail="Multiple matches found, please be more specific")
-    idx = filtered_indices[0]
-    movie_id = movies.loc[idx, 'movieId']
-    timestamp = time.time()
-    new_rating = pd.DataFrame({'movieId': [movie_id], 'rating': [rating], 'timestamp': [timestamp]})
-    if os.path.exists('user_ratings.csv'):
-        ur = pd.read_csv('user_ratings.csv')
-        ur['movieId'] = ur['movieId'].astype(str)
-        if movie_id in ur['movieId'].values:
-            ur.loc[ur['movieId'] == movie_id, 'rating'] = rating
-            ur.loc[ur['movieId'] == movie_id, 'timestamp'] = timestamp
-        else:
-            ur = pd.concat([ur, new_rating], ignore_index=True)
-    else:
-        ur = new_rating
-    ur.to_csv('user_ratings.csv', index=False)
-    # Update matrix
-    if new_user_id not in user_index:
-        user_index = user_index.append(pd.Index([new_user_id]))
-        empty_row = csr_matrix((1, user_ratings.shape[1]))
-        user_ratings = vstack([user_ratings, empty_row])
-    user_row_idx = user_ratings.shape[0] - 1
-    user_ratings[user_row_idx, :] = 0  # Reset row
-    for _, row in ur.iterrows():
-        m_id = str(row['movieId'])
-        if m_id in movie_index:
-            col = movie_index.get_loc(m_id)
-            user_ratings[user_row_idx, col] = row['rating']
-    sim_matrix = cosine_similarity(user_ratings.T)
-    return {"message": "Rating added/updated"}
-
-@app.get("/recommend/personal")
-async def get_personal(n: int = 10):
-    global user_ratings, sim_matrix
-    if not os.path.exists('user_ratings.csv') or pd.read_csv('user_ratings.csv').empty:
-        raise HTTPException(status_code=404, detail="No user ratings yet. Rate some movies first.")
-    if new_user_id not in user_index:
-        return []
-    user_row_idx = user_ratings.shape[0] - 1
-    user_row = user_ratings[user_row_idx, :]
-    rated_cols = user_row.indices  # nonzero columns (sparse)
-    if len(rated_cols) == 0:
-        return []
-    preds = []
-    for j in range(user_ratings.shape[1]):
-        if j in rated_cols:
-            continue
-        sims = sim_matrix[j, rated_cols]
-        user_ratings_rated = user_row[0, rated_cols].toarray().flatten()
-        sum_abs_sims = np.sum(np.abs(sims))
-        if sum_abs_sims == 0:
-            continue
-        pred = np.dot(sims, user_ratings_rated) / sum_abs_sims
-        preds.append((j, pred))
-    if not preds:
-        return []
-    top_preds = sorted(preds, key=lambda x: x[1], reverse=True)[:n]
-    top_movie_ids = [movie_index[j] for j, _ in top_preds]
-    top_titles = movies[movies['movieId'].isin(top_movie_ids)]['original_title'].tolist()
-    return top_titles
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

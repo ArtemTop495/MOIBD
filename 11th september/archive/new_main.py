@@ -1,194 +1,205 @@
+# app.py
+
 import streamlit as st
 import requests
-import os
+import uuid
 
-# Clear proxy settings for correct connection
-os.environ['HTTP_PROXY'] = ''
-os.environ['HTTPS_PROXY'] = ''
+API_URL = "http://127.0.0.1:8000"  # Или URL развернутого API
 
-st.title("Movie Recommender System")
+def main():
+    st.title("Рекомендатель фильмов")
 
-# Sidebar help
-with st.sidebar:
-    st.markdown("""
-    ### Help
-    - **Top 10 Popular Movies**: Click the button to get the top 10 movies by weighted rating. No parameters needed.
-    - **Recommendations by Genre**: Select a genre from the dropdown (parameter: genre). Available genres: Action, Adventure, Animation, Comedy, Crime, Documentary, Drama, Family, Fantasy, History, Horror, Music, Mystery, Romance, Science Fiction, Thriller, War, Western.
-    - **Content-Based Recommendations**: Enter a movie title (parameter: title). Optionally, specify release_date (e.g., '1987-09-01') or tmdb_id (e.g., '14815') to disambiguate duplicate titles. Returns recommendations based on content (TF-IDF and NearestNeighbors).
-    - **Collaborative Filtering Recommendations**: Enter a movie title (parameter: title). Optionally, specify release_date or tmdb_id. Returns recommendations based on collaborative filtering (NearestNeighbors on ratings).
-    - **Browse All Movies**: Click to load the list of all movies with titles, release dates, and TMDb IDs.
-    - **Rate a Movie**: Enter movie title (and optional date/ID), select rating, and submit. Ratings are saved and used for personal recommendations.
-    - **Personal Recommendations**: Get collaborative recommendations based on your saved ratings.
+    if 'user_id' not in st.session_state:
+        st.session_state.user_id = str(uuid.uuid4())
 
-    API URL: http://127.0.0.1:8000
-    """)
+    user_id = st.session_state.user_id
 
-# Button for top 10
-if st.button("Get Top 10 Popular Movies"):
-    try:
-        response = requests.get("http://127.0.0.1:8000/top10")
-        response.raise_for_status()
-        top_movies = response.json()
-        st.markdown("### Top 10 Popular Movies")
-        for i, movie in enumerate(top_movies, 1):
-            st.write(f"{i}. {movie}")
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+    # Сайдбар для навигации
+    menu = st.sidebar.selectbox("Выберите опцию", [
+        "Топ-10 популярных",
+        "Рекомендации по жанру",
+        "Рекомендации по названию",
+        "Коллаборативные рекомендации",
+        "Рекомендации для пользователя",
+        "Поставить оценку",
+        "Список всех фильмов",
+        "Справка"
+    ])
 
-# Combo-box for genre
-genres = [
-    "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama",
-    "Family", "Fantasy", "History", "Horror", "Music", "Mystery", "Romance",
-    "Science Fiction", "Thriller", "War", "Western"
-]
-selected_genre = st.selectbox("Select Genre for Recommendations", genres)
-if st.button("Get Recommendations by Genre"):
-    try:
-        response = requests.get(f"http://127.0.0.1:8000/recommend/genre?genre={selected_genre}")
-        response.raise_for_status()
-        rec_movies = response.json()
-        st.markdown(f"### Recommendations for Genre: {selected_genre}")
-        for i, movie in enumerate(rec_movies, 1):
-            st.write(f"{i}. {movie}")
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
-
-# Input fields for content-based recommendations
-st.markdown("### Content-Based Recommendations")
-content_title = st.text_input("Enter Movie Title for Content-Based Recommendations", key="content_title")
-content_release_date = st.text_input("Enter Release Date (YYYY-MM-DD, optional)", key="content_release_date")
-content_tmdb_id = st.text_input("Enter TMDb ID (optional)", key="content_tmdb_id")
-if st.button("Get Content-Based Recommendations"):
-    if content_title:
-        try:
-            params = {"title": content_title}
-            if content_release_date:
-                params["release_date"] = content_release_date
-            if content_tmdb_id:
-                params["tmdb_id"] = content_tmdb_id
-            response = requests.get("http://127.0.0.1:8000/recommend/title", params=params)
-            response.raise_for_status()
-            rec_movies = response.json()
-            st.markdown(f"### Content-Based Recommendations for '{content_title}'")
-            if isinstance(rec_movies, list):
-                st.warning("No recommendations found.")
-                for i, movie in enumerate(rec_movies, 1):
-                    st.write(f"{i}. {movie}")
-            else:
-                for movie_key, recommendations in rec_movies.items():
-                    st.markdown(f"#### {movie_key}")
-                    if not recommendations:
-                        st.write("No recommendations available for this movie.")
-                    else:
-                        for i, movie in enumerate(recommendations, 1):
-                            st.write(f"{i}. {movie}")
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                error_detail = e.response.json().get("detail", str(e))
-                st.warning(error_detail)
-            else:
-                st.error(f"Error: {str(e)}")
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-    else:
-        st.warning("Please enter a movie title.")
-
-# Input fields for collaborative filtering recommendations
-st.markdown("### Collaborative Filtering Recommendations")
-collab_title = st.text_input("Enter Movie Title for Collaborative Filtering Recommendations", key="collab_title")
-collab_release_date = st.text_input("Enter Release Date (YYYY-MM-DD, optional)", key="collab_release_date")
-collab_tmdb_id = st.text_input("Enter TMDb ID (optional)", key="collab_tmdb_id")
-if st.button("Get Collaborative Filtering Recommendations"):
-    if collab_title:
-        try:
-            params = {"title": collab_title}
-            if collab_release_date:
-                params["release_date"] = collab_release_date
-            if collab_tmdb_id:
-                params["tmdb_id"] = collab_tmdb_id
-            response = requests.get("http://127.0.0.1:8000/recommend/collaborative", params=params)
-            response.raise_for_status()
-            rec_movies = response.json()
-            st.markdown(f"### Collaborative Filtering Recommendations for '{collab_title}'")
-            if isinstance(rec_movies, list):
-                st.warning("No recommendations found.")
-                for i, movie in enumerate(rec_movies, 1):
-                    st.write(f"{i}. {movie}")
-            else:
-                for movie_key, recommendations in rec_movies.items():
-                    st.markdown(f"#### {movie_key}")
-                    if not recommendations:
-                        st.write("No recommendations available for this movie.")
-                    else:
-                        for i, movie in enumerate(recommendations, 1):
-                            st.write(f"{i}. {movie}")
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                error_detail = e.response.json().get("detail", str(e))
-                st.warning(error_detail)
-            else:
-                st.error(f"Error: {str(e)}")
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-    else:
-        st.warning("Please enter a movie title.")
-
-# Browse all movies
-st.markdown("### Browse All Movies")
-if st.button("Load All Movies"):
-    try:
-        response = requests.get("http://127.0.0.1:8000/movies")
-        response.raise_for_status()
-        movies_list = response.json()
-        import pandas as pd
-        df = pd.DataFrame(movies_list)
-        df.rename(columns={'original_title': 'Title', 'release_date': 'Release Date', 'id': 'TMDb ID'}, inplace=True)
-        st.dataframe(df)
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
-
-# Rate a movie
-st.markdown("### Rate a Movie")
-rate_title = st.text_input("Enter Movie Title to Rate", key="rate_title")
-rate_release_date = st.text_input("Enter Release Date (YYYY-MM-DD, optional)", key="rate_release_date")
-rate_tmdb_id = st.text_input("Enter TMDb ID (optional)", key="rate_tmdb_id")
-rate_value = st.slider("Select Rating", min_value=0.5, max_value=5.0, step=0.5, value=3.0)
-if st.button("Submit Rating"):
-    if rate_title:
-        try:
-            body = {"title": rate_title, "release_date": rate_release_date or None, "tmdb_id": rate_tmdb_id or None, "rating": rate_value}
-            response = requests.post("http://127.0.0.1:8000/rate", json=body)
-            response.raise_for_status()
-            st.success(response.json()["message"])
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                error_detail = e.response.json().get("detail", str(e))
-                st.warning(error_detail)
-            else:
-                st.error(f"Error: {str(e)}")
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-    else:
-        st.warning("Please enter a movie title.")
-
-# Personal recommendations
-st.markdown("### Personal Recommendations")
-if st.button("Get Personal Recommendations"):
-    try:
-        response = requests.get("http://127.0.0.1:8000/recommend/personal")
-        response.raise_for_status()
-        rec_movies = response.json()
-        st.markdown("### Your Personalized Recommendations")
-        if not rec_movies:
-            st.warning("No recommendations found. Rate some movies first.")
+    if menu == "Топ-10 популярных":
+        st.header("Топ-10 популярных фильмов")
+        response = requests.get(f"{API_URL}/top10_popular")
+        if response.status_code == 200:
+            recs = response.json()["recommendations"]
+            for rec in recs:
+                st.write(rec)
         else:
-            for i, movie in enumerate(rec_movies, 1):
-                st.write(f"{i}. {movie}")
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            error_detail = e.response.json().get("detail", str(e))
-            st.warning(error_detail)
+            st.error("Ошибка при получении данных")
+
+    elif menu == "Рекомендации по жанру":
+        st.header("Рекомендации по жанру")
+        genre = st.text_input("Введите жанр")
+        if st.button("Получить рекомендации"):
+            if genre:
+                response = requests.get(f"{API_URL}/recommend_by_genre", params={"genre": genre})
+                if response.status_code == 200:
+                    recs = response.json()["recommendations"]
+                    if recs:
+                        for rec in recs:
+                            st.write(rec)
+                    else:
+                        st.write("Нет рекомендаций для этого жанра")
+                else:
+                    st.error("Ошибка при получении данных")
+            else:
+                st.write("Введите жанр")
+
+    elif menu == "Рекомендации по названию":
+        st.header("Рекомендации по названию (по контенту)")
+        title_query = st.text_input("Введите название фильма")
+        if 'movies_found_title' not in st.session_state:
+            st.session_state.movies_found_title = []
+        if st.button("Найти фильмы"):
+            if title_query:
+                response = requests.get(f"{API_URL}/search_movies", params={"query": title_query})
+                if response.status_code == 200:
+                    st.session_state.movies_found_title = response.json()["movies"]
+                    if not st.session_state.movies_found_title:
+                        st.write("Фильм не найден")
+                else:
+                    st.error("Ошибка при получении данных")
+            else:
+                st.write("Введите название")
+        if st.session_state.movies_found_title:
+            options = [f"{m['original_title']} ({m.get('release_date', 'N/A')})" for m in st.session_state.movies_found_title]
+            selected = st.selectbox("Выберите фильм", options)
+            if selected:
+                selected_index = options.index(selected)
+                selected_movie = st.session_state.movies_found_title[selected_index]
+                movie_id = selected_movie['id']
+                if st.button("Получить рекомендации"):
+                    response_rec = requests.get(f"{API_URL}/recommend_by_title", params={"movie_id": movie_id})
+                    if response_rec.status_code == 200:
+                        recs = response_rec.json()["recommendations"]
+                        if recs:
+                            for rec in recs:
+                                st.write(rec)
+                        else:
+                            st.write("Нет рекомендаций")
+                    else:
+                        st.error(response_rec.json()["detail"])
+
+    elif menu == "Коллаборативные рекомендации":
+        st.header("Коллаборативные рекомендации")
+        title_query = st.text_input("Введите название фильма")
+        if 'movies_found_collab' not in st.session_state:
+            st.session_state.movies_found_collab = []
+        if st.button("Найти фильмы"):
+            if title_query:
+                response = requests.get(f"{API_URL}/search_movies", params={"query": title_query})
+                if response.status_code == 200:
+                    st.session_state.movies_found_collab = response.json()["movies"]
+                    if not st.session_state.movies_found_collab:
+                        st.write("Фильм не найден")
+                else:
+                    st.error("Ошибка при получении данных")
+            else:
+                st.write("Введите название")
+        if st.session_state.movies_found_collab:
+            options = [f"{m['original_title']} ({m.get('release_date', 'N/A')})" for m in st.session_state.movies_found_collab]
+            selected = st.selectbox("Выберите фильм", options)
+            if selected:
+                selected_index = options.index(selected)
+                selected_movie = st.session_state.movies_found_collab[selected_index]
+                movie_id = selected_movie['id']
+                if st.button("Получить рекомендации"):
+                    response_rec = requests.get(f"{API_URL}/recommend_collaborative", params={"movie_id": movie_id})
+                    if response_rec.status_code == 200:
+                        recs = response_rec.json()["recommendations"]
+                        if recs:
+                            for rec in recs:
+                                st.write(rec)
+                        else:
+                            st.write("Нет рекомендаций")
+                    else:
+                        st.error(response_rec.json()["detail"])
+
+    elif menu == "Рекомендации для пользователя":
+        st.header("Рекомендации для пользователя")
+        if st.button("Получить рекомендации"):
+            response = requests.get(f"{API_URL}/recommend_for_user", params={"user_id": user_id})
+            if response.status_code == 200:
+                recs = response.json()["recommendations"]
+                if recs:
+                    for rec in recs:
+                        st.write(rec)
+                else:
+                    st.write("Нет рекомендаций")
+            else:
+                st.error(response.json()["detail"])
+
+    elif menu == "Поставить оценку":
+        st.header("Поставить оценку")
+        title_query = st.text_input("Введите название фильма")
+        if 'movies_found_rating' not in st.session_state:
+            st.session_state.movies_found_rating = []
+        if st.button("Найти фильмы"):
+            if title_query:
+                response = requests.get(f"{API_URL}/search_movies", params={"query": title_query})
+                if response.status_code == 200:
+                    st.session_state.movies_found_rating = response.json()["movies"]
+                    if not st.session_state.movies_found_rating:
+                        st.write("Фильм не найден")
+                else:
+                    st.error("Ошибка при получении данных")
+            else:
+                st.write("Введите название")
+        if st.session_state.movies_found_rating:
+            options = [f"{m['original_title']} ({m.get('release_date', 'N/A')})" for m in st.session_state.movies_found_rating]
+            selected = st.selectbox("Выберите фильм", options)
+            if selected:
+                selected_index = options.index(selected)
+                selected_movie = st.session_state.movies_found_rating[selected_index]
+                movie_id = selected_movie['id']
+                rating = st.number_input("Оценка (1-5)", min_value=1.0, max_value=5.0, step=0.5)
+                if st.button("Сохранить оценку"):
+                    response = requests.post(f"{API_URL}/set_rating", params={"user_id": user_id, "movie_id": movie_id, "rating": rating})
+                    if response.status_code == 200:
+                        st.success("Оценка сохранена")
+                    else:
+                        st.error(response.json()["detail"])
+
+    elif menu == "Список всех фильмов":
+        st.header("Список всех фильмов")
+        response = requests.get(f"{API_URL}/list_all_movies")
+        if response.status_code == 200:
+            movies_list = response.json()["movies"]
+            for movie in movies_list:
+                st.write(f"{movie['original_title']} ({movie.get('release_date', 'N/A')})")
         else:
-            st.error(f"Error: {str(e)}")
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+            st.error("Ошибка при получении данных")
+
+    elif menu == "Справка":
+        st.header("Справка")
+        st.write("""
+Справка по командам:
+
+- Топ-10 популярных: Показывает топ-10 фильмов по взвешенным рейтингам. Без параметров.
+
+- Рекомендации по жанру: Введите жанр в поле. Показывает 10 рекомендаций.
+
+- Рекомендации по названию: Введите название в поле 'Название фильма'. Рекомендации по контенту.
+
+- Коллаборативные рекомендации: Введите название в поле 'Название фильма'. Item-based CF.
+
+- Рекомендации для пользователя: Рекомендации на основе оценок пользователя.
+
+- Поставить оценку: Введите название фильма и оценку (1-5).
+
+- Список всех фильмов: Показывает все фильмы с датами релиза.
+
+- Справка: Показывает это сообщение.
+        """)
+
+if __name__ == "__main__":
+    main()
