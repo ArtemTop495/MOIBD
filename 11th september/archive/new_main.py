@@ -6,23 +6,25 @@ import uuid
 
 API_URL = "http://127.0.0.1:8000"  # Или URL развернутого API
 
+
 def main():
     st.title("Рекомендатель фильмов")
 
     if 'user_id' not in st.session_state:
         st.session_state.user_id = str(uuid.uuid4())
 
-    user_id = st.session_state.user_id
+    # user_id = st.session_state.user_id
+    user_id = "37cb45ae-efca-4685-9cab-2abac3d0739a"
 
     # Сайдбар для навигации
     menu = st.sidebar.selectbox("Выберите опцию", [
         "Топ-10 популярных",
         "Рекомендации по жанру",
         "Рекомендации по названию",
-        "Коллаборативные рекомендации",
         "Рекомендации для пользователя",
         "Поставить оценку",
         "Список всех фильмов",
+        "Мои оценки",  # New menu option
         "Справка"
     ])
 
@@ -38,7 +40,12 @@ def main():
 
     elif menu == "Рекомендации по жанру":
         st.header("Рекомендации по жанру")
-        genre = st.text_input("Введите жанр")
+        genres = [
+            "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama",
+            "Family", "Fantasy", "History", "Horror", "Music", "Mystery", "Romance",
+            "Science Fiction", "Thriller", "War", "Western"
+        ]
+        genre = st.selectbox("Select Genre for Recommendations", genres)
         if st.button("Получить рекомендации"):
             if genre:
                 response = requests.get(f"{API_URL}/recommend_by_genre", params={"genre": genre})
@@ -71,7 +78,8 @@ def main():
             else:
                 st.write("Введите название")
         if st.session_state.movies_found_title:
-            options = [f"{m['original_title']} ({m.get('release_date', 'N/A')})" for m in st.session_state.movies_found_title]
+            options = [f"{m['original_title']} ({m.get('release_date', 'N/A')})" for m in
+                       st.session_state.movies_found_title]
             selected = st.selectbox("Выберите фильм", options)
             if selected:
                 selected_index = options.index(selected)
@@ -79,42 +87,7 @@ def main():
                 movie_id = selected_movie['id']
                 if st.button("Получить рекомендации"):
                     response_rec = requests.get(f"{API_URL}/recommend_by_title", params={"movie_id": movie_id})
-                    if response_rec.status_code == 200:
-                        recs = response_rec.json()["recommendations"]
-                        if recs:
-                            for rec in recs:
-                                st.write(rec)
-                        else:
-                            st.write("Нет рекомендаций")
-                    else:
-                        st.error(response_rec.json()["detail"])
-
-    elif menu == "Коллаборативные рекомендации":
-        st.header("Коллаборативные рекомендации")
-        title_query = st.text_input("Введите название фильма")
-        if 'movies_found_collab' not in st.session_state:
-            st.session_state.movies_found_collab = []
-        if st.button("Найти фильмы"):
-            if title_query:
-                response = requests.get(f"{API_URL}/search_movies", params={"query": title_query})
-                if response.status_code == 200:
-                    st.session_state.movies_found_collab = response.json()["movies"]
-                    if not st.session_state.movies_found_collab:
-                        st.write("Фильм не найден")
-                else:
-                    st.error("Ошибка при получении данных")
-            else:
-                st.write("Введите название")
-        if st.session_state.movies_found_collab:
-            options = [f"{m['original_title']} ({m.get('release_date', 'N/A')})" for m in st.session_state.movies_found_collab]
-            selected = st.selectbox("Выберите фильм", options)
-            if selected:
-                selected_index = options.index(selected)
-                selected_movie = st.session_state.movies_found_collab[selected_index]
-                movie_id = selected_movie['id']
-                if st.button("Получить рекомендации"):
-                    response_rec = requests.get(f"{API_URL}/recommend_collaborative", params={"movie_id": movie_id})
-                    if response_rec.status_code == 200:
+                    if response.status_code == 200:
                         recs = response_rec.json()["recommendations"]
                         if recs:
                             for rec in recs:
@@ -155,7 +128,8 @@ def main():
             else:
                 st.write("Введите название")
         if st.session_state.movies_found_rating:
-            options = [f"{m['original_title']} ({m.get('release_date', 'N/A')})" for m in st.session_state.movies_found_rating]
+            options = [f"{m['original_title']} ({m.get('release_date', 'N/A')})" for m in
+                       st.session_state.movies_found_rating]
             selected = st.selectbox("Выберите фильм", options)
             if selected:
                 selected_index = options.index(selected)
@@ -163,7 +137,8 @@ def main():
                 movie_id = selected_movie['id']
                 rating = st.number_input("Оценка (1-5)", min_value=1.0, max_value=5.0, step=0.5)
                 if st.button("Сохранить оценку"):
-                    response = requests.post(f"{API_URL}/set_rating", params={"user_id": user_id, "movie_id": movie_id, "rating": rating})
+                    response = requests.post(f"{API_URL}/set_rating",
+                                             params={"user_id": user_id, "movie_id": movie_id, "rating": rating})
                     if response.status_code == 200:
                         st.success("Оценка сохранена")
                     else:
@@ -178,6 +153,22 @@ def main():
                 st.write(f"{movie['original_title']} ({movie.get('release_date', 'N/A')})")
         else:
             st.error("Ошибка при получении данных")
+
+    elif menu == "Мои оценки":
+        st.header("Мои оценки")
+        response = requests.get(f"{API_URL}/get_user_ratings", params={"user_id": user_id})
+        if response.status_code == 200:
+            ratings = response.json()["ratings"]
+            if ratings:
+                for rating in ratings:
+                    st.write(f"Фильм: {rating['title']} ({rating.get('release_date', 'N/A')})")
+                    st.write(f"Жанры: {rating['genres'] if rating['genres'] else 'N/A'}")
+                    st.write(f"Оценка: {rating['rating']}")
+                    st.write("---")
+            else:
+                st.write("Вы еще не оценили ни одного фильма")
+        else:
+            st.error(response.json()["detail"])
 
     elif menu == "Справка":
         st.header("Справка")
@@ -198,8 +189,11 @@ def main():
 
 - Список всех фильмов: Показывает все фильмы с датами релиза.
 
+- Мои оценки: Показывает все ваши оценки с названиями фильмов, датами релиза и жанрами.
+
 - Справка: Показывает это сообщение.
         """)
+
 
 if __name__ == "__main__":
     main()

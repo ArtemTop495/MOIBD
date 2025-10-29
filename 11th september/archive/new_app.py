@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException
 import pandas as pd
 import numpy as np
 import pickle
+
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.neighbors import NearestNeighbors
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -23,14 +24,15 @@ TFIDF_MODEL_FILE = 'tfidf_vectorizer.pkl'
 NN_MODEL_FILE = 'nn_model.pkl'
 
 # Глобальные переменные
-movies = None
+movies: pd.DataFrame = None
 tfidf = None
-tfidf_matrix = None
-nn_model = None
-item_sim_df = None
+tfidf_matrix = []
+nn_model: NearestNeighbors = None
+item_sim_df: pd.DataFrame = None
 title_to_index = None
 user_ratings = {}
-user_item_matrix = None
+user_item_matrix: pd.DataFrame = None
+
 
 def load_user_ratings():
     global user_ratings
@@ -40,9 +42,11 @@ def load_user_ratings():
     else:
         user_ratings = {}
 
+
 def save_user_ratings():
     with open(USER_RATINGS_FILE, 'w') as f:
         json.dump(user_ratings, f)
+
 
 def load_data():
     global movies, tfidf, tfidf_matrix, nn_model, item_sim_df, title_to_index, user_item_matrix
@@ -58,7 +62,9 @@ def load_data():
 
     ratings = ratings.merge(links[['movieId', 'tmdbId']], left_on='movieId', right_on='movieId', how='inner')
     ratings['movieId'] = pd.to_numeric(ratings['tmdbId'], errors='coerce')
-    ratings = ratings.merge(movies[['id', 'original_title', 'genres', 'overview', 'vote_average', 'vote_count', 'release_date']], left_on='movieId', right_on='id', how='inner')
+    ratings = ratings.merge(
+        movies[['id', 'original_title', 'genres', 'overview', 'vote_average', 'vote_count', 'release_date']],
+        left_on='movieId', right_on='id', how='inner')
 
     def get_genres(x):
         try:
@@ -77,7 +83,8 @@ def load_data():
     keywords['keywords_str'] = keywords['keywords'].apply(get_keywords)
     movies = movies.merge(keywords[['id', 'keywords_str']], on='id', how='left')
 
-    movies['soup'] = movies['overview'].fillna('') + ' ' + movies['genres_str'] + ' ' + movies['keywords_str'].fillna('')
+    movies['soup'] = movies['overview'].fillna('') + ' ' + movies['genres_str'] + ' ' + movies['keywords_str'].fillna(
+        '')
 
     tfidf = TfidfVectorizer(stop_words='english')
     tfidf_matrix = tfidf.fit_transform(movies['soup'])
@@ -85,10 +92,10 @@ def load_data():
     nn_model = NearestNeighbors(n_neighbors=11, metric='cosine', algorithm='brute')
     nn_model.fit(tfidf_matrix)
 
-    def weighted_rating(x, m=movies['vote_count'].quantile(0.8), C=movies['vote_average'].mean()):
+    def weighted_rating(x, m=movies['vote_count'].quantile(0.8), c=movies['vote_average'].mean()):
         v = x['vote_count']
         R = x['vote_average']
-        return (v / (v + m) * R) + (m / (m + v) * C)
+        return (v / (v + m) * R) + (m / (m + v) * c)
 
     movies['weighted_rating'] = movies.apply(weighted_rating, axis=1)
 
@@ -103,14 +110,17 @@ def load_data():
     with open(NN_MODEL_FILE, 'wb') as f:
         pickle.dump(nn_model, f)
 
+
 # Загрузка данных при старте
 load_user_ratings()
 load_data()
+
 
 @app.get("/top10_popular")
 def api_get_top10_popular():
     top10 = movies.sort_values('weighted_rating', ascending=False)['original_title'].head(10).tolist()
     return {"recommendations": top10}
+
 
 @app.get("/recommend_by_genre")
 def api_recommend_by_genre(genre: str, n: int = 10):
@@ -119,10 +129,12 @@ def api_recommend_by_genre(genre: str, n: int = 10):
     recs = genre_movies['original_title'].head(n).tolist()
     return {"recommendations": recs}
 
+
 @app.get("/search_movies")
 def api_search_movies(query: str):
     matches = movies[movies['original_title'].str.lower() == query.lower()]
     return {"movies": matches[['id', 'original_title', 'release_date']].replace(np.nan, None).to_dict('records')}
+
 
 @app.get("/recommend_by_title")
 def api_recommend_by_title(movie_id: int, n: int = 10):
@@ -130,10 +142,11 @@ def api_recommend_by_title(movie_id: int, n: int = 10):
         raise HTTPException(status_code=404, detail="Movie not found")
     idx = movies[movies['id'] == movie_id].index[0]
     movie_vector = tfidf_matrix[idx]
-    distances, indices = nn_model.kneighbors(movie_vector, n_neighbors=n+1)
+    distances, indices = nn_model.kneighbors(movie_vector, n_neighbors=n + 1)
     movie_indices = indices[0][1:]
     recs = movies['original_title'].iloc[movie_indices].tolist()
     return {"recommendations": recs}
+
 
 @app.get("/recommend_collaborative")
 def api_recommend_collaborative(movie_id: int, n: int = 10):
@@ -141,14 +154,16 @@ def api_recommend_collaborative(movie_id: int, n: int = 10):
         raise HTTPException(status_code=404, detail="Movie not found")
     if movie_id not in item_sim_df.columns:
         raise HTTPException(status_code=404, detail="No recommendations available")
-    similar_movies = item_sim_df.loc[movie_id].sort_values(ascending=False).iloc[1:n+1].index
+    similar_movies = item_sim_df.loc[movie_id].sort_values(ascending=False).iloc[1:n + 1].index
     recs = movies[movies['id'].isin(similar_movies)]['original_title'].head(n).tolist()
     return {"recommendations": recs}
+
 
 @app.get("/list_all_movies")
 def api_list_all_movies():
     movie_list = movies[['original_title', 'release_date']].replace(np.nan, None).to_dict('records')
     return {"movies": movie_list}
+
 
 @app.post("/set_rating")
 def api_set_rating(user_id: str, movie_id: int, rating: float):
@@ -159,6 +174,26 @@ def api_set_rating(user_id: str, movie_id: int, rating: float):
     user_ratings[user_id][movie_id] = rating
     save_user_ratings()
     return {"status": "success"}
+
+
+@app.get("/get_user_ratings")
+def api_get_user_ratings(user_id: str):
+    if user_id not in user_ratings or not user_ratings[user_id]:
+        raise HTTPException(status_code=404, detail="No ratings for user")
+    user_ratings_list = []
+    for movie_id, rating in user_ratings[user_id].items():
+        movie = (movies[movies['id'] == int(movie_id)][['original_title', 'release_date', 'genres_str']]
+                 .replace(np.nan, None).to_dict('records'))
+        if movie:
+            user_ratings_list.append({
+                "movie_id": movie_id,
+                "title": movie[0]['original_title'],
+                "release_date": movie[0]['release_date'],
+                "genres": movie[0]['genres_str'],
+                "rating": rating
+            })
+    return {"ratings": user_ratings_list}
+
 
 @app.get("/recommend_for_user")
 def api_recommend_for_user(user_id: str, n: int = 10):
@@ -189,6 +224,8 @@ def api_recommend_for_user(user_id: str, n: int = 10):
     recs = movies[movies['id'].isin(rec_movie_ids)]['original_title'].tolist()
     return {"recommendations": recs}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
