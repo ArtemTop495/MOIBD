@@ -148,17 +148,6 @@ def api_recommend_by_title(movie_id: int, n: int = 10):
     return {"recommendations": recs}
 
 
-@app.get("/recommend_collaborative")
-def api_recommend_collaborative(movie_id: int, n: int = 10):
-    if movie_id not in movies['id'].values:
-        raise HTTPException(status_code=404, detail="Movie not found")
-    if movie_id not in item_sim_df.columns:
-        raise HTTPException(status_code=404, detail="No recommendations available")
-    similar_movies = item_sim_df.loc[movie_id].sort_values(ascending=False).iloc[1:n + 1].index
-    recs = movies[movies['id'].isin(similar_movies)]['original_title'].head(n).tolist()
-    return {"recommendations": recs}
-
-
 @app.get("/list_all_movies")
 def api_list_all_movies():
     movie_list = movies[['original_title', 'release_date']].replace(np.nan, None).to_dict('records')
