@@ -4,7 +4,7 @@ import streamlit as st
 import requests
 import uuid
 
-API_URL = "http://127.0.0.1:8000"  # Или URL развернутого API
+API_URL = "http://127.0.0.1:8002"  # Или URL развернутого API
 
 
 def main():
